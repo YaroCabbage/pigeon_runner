@@ -298,14 +298,19 @@ Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
         pigeonArgs.add('--$key');
       }
     } else if (value is String && value.isNotEmpty) {
-      pigeonArgs.addAll(['--$key', value]);
+      final processedValue = await _processDirectoryOption(
+        key,
+        value,
+        inputFile,
+      );
+      pigeonArgs.add('--$processedValue');
     } else if (value is YamlList) {
       // Handle list values (like copyright_header)
       for (final item in value) {
         pigeonArgs.addAll(['--$key', item.toString()]);
       }
     } else if (value != null) {
-      pigeonArgs.addAll(['--$key', value.toString()]);
+      throw "Failed to process option $key with value: $value";
     }
   }
 
@@ -318,6 +323,88 @@ Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
       'Pigeon failed with exit code ${result.exitCode}\n'
       'stderr: ${result.stderr}',
     );
+  }
+}
+
+const kMkdirR = 'mkdir_r_';
+const kMkdir = 'mkdir_';
+
+/// Process directory creation options with mkdir_ and mkdir_r_ prefixes
+Future<String> _processDirectoryOption(
+  String key,
+  String value,
+  String inputFile,
+) async {
+  if (key.startsWith(kMkdirR)) {
+    // Recursive directory creation with intermediate directories
+    final actualKey = key.replaceFirst(kMkdirR, ''); // Remove 'mkdir_r_' prefix
+    final outputPath = _createRecursiveOutputPath(value, inputFile);
+    await _ensureDirectoryExists(path.dirname(outputPath));
+    return '$actualKey $outputPath';
+  } else if (key.startsWith(kMkdir)) {
+    final fileName = path.basename(inputFile);
+    final filePathNormalized = path.normalize('$value/$fileName');
+
+    // Simple directory creation
+    final actualKey = key.replaceFirst(kMkdir, ''); // Remove 'mkdir_' prefix
+    await _ensureDirectoryExists(value);
+    return '$actualKey $filePathNormalized';
+  }
+
+  // If it's not a directory option
+  return '$key $value';
+}
+
+/// Create recursive output path maintaining directory structure
+String _createRecursiveOutputPath(String baseOutputPath, String inputFile) {
+  // Get the relative directory structure from the input file
+  final inputDir = path.dirname(inputFile);
+  final inputBasename = path.basenameWithoutExtension(inputFile);
+  final outputExtension = path.extension(baseOutputPath);
+
+  // Extract the relative path structure
+  // For example: if inputFile is "lib/pigeon/auth/user.dart"
+  // and baseOutputPath is "generated/auth.dart"
+  // we want to create "generated/auth/user.dart"
+
+  final inputParts = path.split(inputDir);
+  final baseParts = path.split(path.dirname(baseOutputPath));
+  final baseFilename = path.basenameWithoutExtension(baseOutputPath);
+
+  // Find common directory structure to preserve
+  List<String> relativeParts = [];
+
+  // Try to find a meaningful subdirectory structure
+  if (inputParts.length > 1) {
+    // Take the last meaningful directory parts
+    final startIndex = inputParts.indexWhere((part) => part == 'pigeon');
+    if (startIndex != -1 && startIndex < inputParts.length - 1) {
+      relativeParts = inputParts.sublist(startIndex + 1);
+    } else if (inputParts.length > 2) {
+      relativeParts = inputParts.sublist(inputParts.length - 2);
+    }
+  }
+
+  // Build the final path
+  final outputDir = path.joinAll([...baseParts, ...relativeParts]);
+  final outputFilename = '$inputBasename$outputExtension';
+
+  return path.join(outputDir, outputFilename);
+}
+
+/// Ensure directory exists, create if it doesn't
+Future<void> _ensureDirectoryExists(String dirPath) async {
+  if (dirPath.isEmpty) return;
+
+  final current = Directory.current;
+  final directory = Directory(dirPath);
+  if (!await directory.exists()) {
+    try {
+      await directory.create(recursive: true);
+      print('  📁 Created directory: $dirPath');
+    } catch (e) {
+      print('  ⚠️ Warning: Could not create directory $dirPath: $e');
+    }
   }
 }
 
