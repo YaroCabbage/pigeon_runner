@@ -167,7 +167,11 @@ input: lib/pigeon/**/api?.dart
 
 ## Option Translation
 
-All YAML options are automatically converted to pigeon arguments by adding `--` prefix:
+All YAML options are automatically converted to pigeon arguments by adding `--` prefix.
+
+**For available parameter names, refer to:**
+- [Pigeon library source](https://github.com/flutter/packages/blob/98ac61aaa1c07c2e4c42361ad1735a1bb23c6f65/packages/pigeon/lib/src/pigeon_lib.dart)
+- [Pigeon example configuration](https://github.com/flutter/packages/blob/main/packages/pigeon/example/app/pigeons/messages.dart)
 
 ### YAML Configuration:
 ```yaml
