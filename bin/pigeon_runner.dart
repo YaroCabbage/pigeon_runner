@@ -283,7 +283,7 @@ Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
   final pigeonArgs = <String>[];
 
   // Add input file
-  pigeonArgs.addAll(['--input', inputFile]);
+  pigeonArgs.addAll(['--input', File(inputFile).resolveSymbolicLinksSync()]);
 
   // Convert all YAML options to pigeon arguments by adding "--" prefix
   for (final entry in config.entries) {

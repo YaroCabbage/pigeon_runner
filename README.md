@@ -19,7 +19,13 @@ Most likely, overwriting will occur in the order of processing. That is, if `par
 
 ## Installation
 
-This package is intended to support development of Dart projects with pigeon inside. In general, add it to your pubspec.yaml as a dev_dependencies by running the following command.
+- Install pigeon
+
+```bash
+dart pub add dev:pigeon
+```
+
+- This package is intended to support development of Dart projects with pigeon inside. In general, add it to your pubspec.yaml as a dev_dependencies by running the following command.
 
 ```bash
 dart pub add dev:pigeon_runner
