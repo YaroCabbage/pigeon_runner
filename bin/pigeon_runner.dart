@@ -6,6 +6,10 @@ import 'package:dart_zx/dart_zx.dart' show $;
 import 'package:path/path.dart' as path;
 import 'package:yaml/yaml.dart';
 
+const kMkdirR = 'mkdir_r_';
+const kMkdir = 'mkdir_';
+const kDartPostfix = '.dart';
+
 /// Batch runner for Pigeon code generation using dart_zx
 /// Supports different settings for different folders/groups
 void main(List<String> arguments) async {
@@ -47,12 +51,12 @@ void main(List<String> arguments) async {
     int groupSuccess = 0;
     int groupErrors = 0;
 
-    for (final inputFile in group.inputFiles) {
-      print('Processing: $inputFile');
+    for (final inputFileInfo in group.inputFiles) {
+      print('Processing: ${inputFileInfo.filePath}');
 
       try {
         // Generate code using pigeon command with group settings
-        await _runPigeonForFile(inputFile, group.settings);
+        await _runPigeonForFile(inputFileInfo, group.settings);
         print('  ✓ Generated successfully');
         groupSuccess++;
       } catch (e) {
@@ -79,10 +83,18 @@ void main(List<String> arguments) async {
   }
 }
 
+/// Input file information with its parent source
+class InputFileInfo {
+  final String filePath;
+  final String inputParent;
+
+  InputFileInfo({required this.filePath, required this.inputParent});
+}
+
 /// Configuration group for pigeon files
 class PigeonGroup {
   final String name;
-  final List<String> inputFiles;
+  final List<InputFileInfo> inputFiles;
   final YamlMap settings;
 
   PigeonGroup({
@@ -149,8 +161,8 @@ List<PigeonGroup> _parseConfigGroups(YamlMap config) {
 }
 
 /// Extract input files from configuration
-List<String> _getInputFiles(YamlMap config) {
-  final inputFiles = <String>[];
+List<InputFileInfo> _getInputFiles(YamlMap config) {
+  final inputFiles = <InputFileInfo>[];
 
   // Check for single input file
   if (config.containsKey('input')) {
@@ -182,22 +194,28 @@ List<String> _getInputFiles(YamlMap config) {
 }
 
 /// Process input string - can be file, directory, or wildcard pattern
-List<String> _processInput(String input) {
-  final files = <String>[];
+List<InputFileInfo> _processInput(String input) {
+  final files = <InputFileInfo>[];
 
   // If input contains wildcard, process recursively
   if (input.contains('*') || input.contains('?')) {
-    files.addAll(_findFilesWithWildcard(input));
+    final foundFiles = _findFilesWithWildcard(input);
+    for (final file in foundFiles) {
+      files.add(InputFileInfo(filePath: file, inputParent: input));
+    }
   } else {
     // Check if it's a directory or file
     final entity = FileSystemEntity.typeSync(input);
 
     if (entity == FileSystemEntityType.directory) {
       // Directory - process only top-level files
-      files.addAll(_findFilesInDirectory(input, recursive: false));
+      final foundFiles = _findFilesInDirectory(input, recursive: false);
+      for (final file in foundFiles) {
+        files.add(InputFileInfo(filePath: file, inputParent: input));
+      }
     } else if (entity == FileSystemEntityType.file) {
       // Single file
-      files.add(input);
+      files.add(InputFileInfo(filePath: input, inputParent: input));
     } else {
       print('Warning: Input not found: $input');
     }
@@ -219,7 +237,7 @@ List<String> _findFilesInDirectory(String dirPath, {required bool recursive}) {
   try {
     final entities = directory.listSync(recursive: recursive);
     for (final entity in entities) {
-      if (entity is File && entity.path.endsWith('.dart')) {
+      if (entity is File && entity.path.endsWith(kDartPostfix)) {
         files.add(entity.path);
       }
     }
@@ -253,7 +271,8 @@ List<String> _findFilesWithWildcard(String pattern) {
     for (final entity in entities) {
       if (entity is File) {
         final fileName = path.basename(entity.path);
-        if (_matchesPattern(fileName, patternName)) {
+        if (fileName.endsWith(kDartPostfix) &&
+            _matchesPattern(fileName, patternName)) {
           files.add(entity.path);
         }
       }
@@ -279,11 +298,17 @@ bool _matchesPattern(String fileName, String pattern) {
 }
 
 /// Run pigeon command for a specific file using configuration
-Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
+Future<void> _runPigeonForFile(
+  InputFileInfo inputFileInfo,
+  YamlMap config,
+) async {
   final pigeonArgs = <String>[];
 
   // Add input file
-  pigeonArgs.addAll(['--input', File(inputFile).resolveSymbolicLinksSync()]);
+  pigeonArgs.addAll([
+    '--input',
+    File(inputFileInfo.filePath).resolveSymbolicLinksSync(),
+  ]);
 
   // Convert all YAML options to pigeon arguments by adding "--" prefix
   for (final entry in config.entries) {
@@ -301,7 +326,8 @@ Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
       final processedValue = await _processDirectoryOption(
         key,
         value,
-        inputFile,
+        inputFileInfo.filePath,
+        inputFileInfo.inputParent,
       );
       pigeonArgs.add('--$processedValue');
     } else if (value is YamlList) {
@@ -326,19 +352,21 @@ Future<void> _runPigeonForFile(String inputFile, YamlMap config) async {
   }
 }
 
-const kMkdirR = 'mkdir_r_';
-const kMkdir = 'mkdir_';
-
 /// Process directory creation options with mkdir_ and mkdir_r_ prefixes
 Future<String> _processDirectoryOption(
   String key,
   String value,
   String inputFile,
+  String inputParent,
 ) async {
   if (key.startsWith(kMkdirR)) {
     // Recursive directory creation with intermediate directories
     final actualKey = key.replaceFirst(kMkdirR, ''); // Remove 'mkdir_r_' prefix
-    final outputPath = _createRecursiveOutputPath(value, inputFile);
+    final outputPath = _createRecursiveOutputPath(
+      value,
+      inputFile,
+      inputParent,
+    );
     await _ensureDirectoryExists(path.dirname(outputPath));
     return '$actualKey $outputPath';
   } else if (key.startsWith(kMkdir)) {
@@ -356,47 +384,48 @@ Future<String> _processDirectoryOption(
 }
 
 /// Create recursive output path maintaining directory structure
-String _createRecursiveOutputPath(String baseOutputPath, String inputFile) {
+String _createRecursiveOutputPath(
+  String outputBasePath,
+  String inputFilePath,
+  String inputBasePath,
+) {
   // Get the relative directory structure from the input file
-  final inputDir = path.dirname(inputFile);
-  final inputBasename = path.basenameWithoutExtension(inputFile);
-  final outputExtension = path.extension(baseOutputPath);
+  final inputFileDir = path.dirname(inputFilePath);
+  final inputFilename = path.basename(inputFilePath);
+  final generatedOutputFilename =
+      '${path.basenameWithoutExtension(inputFilePath)}.g${path.extension(inputFilePath)}';
 
-  // Extract the relative path structure
-  // For example: if inputFile is "lib/pigeon/auth/user.dart"
-  // and baseOutputPath is "generated/auth.dart"
-  // we want to create "generated/auth/user.dart"
+  // Calculate relative path from input parent to input file
+  // String relativePath = '';
 
-  final inputParts = path.split(inputDir);
-  final baseParts = path.split(path.dirname(baseOutputPath));
-  final baseFilename = path.basenameWithoutExtension(baseOutputPath);
+  var inputParentBaseParts = path.split(inputBasePath);
+  final index = inputParentBaseParts.indexWhere((element) {
+    return element.contains('*') || element.contains('?');
+  });
 
-  // Find common directory structure to preserve
-  List<String> relativeParts = [];
-
-  // Try to find a meaningful subdirectory structure
-  if (inputParts.length > 1) {
-    // Take the last meaningful directory parts
-    final startIndex = inputParts.indexWhere((part) => part == 'pigeon');
-    if (startIndex != -1 && startIndex < inputParts.length - 1) {
-      relativeParts = inputParts.sublist(startIndex + 1);
-    } else if (inputParts.length > 2) {
-      relativeParts = inputParts.sublist(inputParts.length - 2);
-    }
+  if (index != -1) {
+    inputParentBaseParts = inputParentBaseParts.sublist(0, index);
   }
 
-  // Build the final path
-  final outputDir = path.joinAll([...baseParts, ...relativeParts]);
-  final outputFilename = '$inputBasename$outputExtension';
+  final inputParentBaseCleaned = path.joinAll(inputParentBaseParts);
+  final inputFilePathWithoutParentBase = inputFilePath.replaceFirst(
+    inputParentBaseCleaned,
+    '',
+  );
+  final inputFileParts = path.split(inputFilePathWithoutParentBase);
+  inputFileParts.remove(inputFilename);
 
-  return path.join(outputDir, outputFilename);
+  final outPath = path.normalize(
+    [outputBasePath, ...inputFileParts, generatedOutputFilename].join('/'),
+  );
+
+  return outPath;
 }
 
 /// Ensure directory exists, create if it doesn't
 Future<void> _ensureDirectoryExists(String dirPath) async {
   if (dirPath.isEmpty) return;
 
-  final current = Directory.current;
   final directory = Directory(dirPath);
   if (!await directory.exists()) {
     try {
